@@ -30,6 +30,9 @@ type RouterConfig struct {
 	// According to the specification, we may choose to always pause for 20 ms // after transmitting,
 	// bu we should always pause for at least 5 ms on a multicast address.
 	PostSendPauseDuration time.Duration
+	// Socket uses an already established routing transport instead of joining
+	// multicastAddress. The Router takes ownership and closes it on Close.
+	Socket knxnet.Socket
 }
 
 // DefaultRouterConfig is a good default configuration for a Router client.
@@ -149,9 +152,13 @@ func (router *Router) serve() {
 func NewRouter(multicastAddress string, config RouterConfig) (*Router, error) {
 	config = checkRouterConfig(config)
 
-	sock, err := knxnet.ListenRouterOnInterface(config.Interface, multicastAddress, config.MulticastLoopbackEnabled)
-	if err != nil {
-		return nil, err
+	sock := config.Socket
+	if sock == nil {
+		var err error
+		sock, err = knxnet.ListenRouterOnInterface(config.Interface, multicastAddress, config.MulticastLoopbackEnabled)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	r := &Router{

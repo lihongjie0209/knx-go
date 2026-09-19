@@ -5,10 +5,30 @@ import (
 	"time"
 
 	"github.com/knx-go/knx-go/knx/cemi"
+	"github.com/knx-go/knx-go/knx/knxnet"
 )
 
 type stubMessage struct {
 	id int
+}
+
+func TestNewRouterUsesInjectedSocket(t *testing.T) {
+	client, gateway := newDummySockets()
+	defer gateway.Close()
+	router, err := NewRouter("unused.invalid:0", RouterConfig{Socket: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := &stubMessage{id: 7}
+	if err := router.Send(message); err != nil {
+		t.Fatal(err)
+	}
+	packet := <-gateway.Inbound()
+	indication, ok := packet.(*knxnet.RoutingInd)
+	if !ok || indication.Payload != message {
+		t.Fatalf("packet=%#v", packet)
+	}
+	router.Close()
 }
 
 func (m *stubMessage) MessageCode() cemi.MessageCode { return cemi.LDataIndCode }
