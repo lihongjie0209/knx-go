@@ -349,6 +349,36 @@ func TestTunnelConn_requestConn(t *testing.T) {
 	})
 }
 
+func TestNewTunnelUsesInjectedSocket(t *testing.T) {
+	client, gateway := newDummySockets()
+	defer gateway.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		message := <-gateway.Inbound()
+		request, ok := message.(*knxnet.ConnReq)
+		if !ok {
+			return
+		}
+		gateway.sendAny(&knxnet.ConnRes{
+			Channel: 1,
+			Status:  knxnet.NoError,
+			Control: request.Control,
+		})
+		for range gateway.Inbound() {
+		}
+	}()
+	config := DefaultTunnelConfig
+	config.Socket = client
+	tunnel, err := NewTunnel("unused.invalid:0", knxnet.TunnelLayerData, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel.Close()
+	gateway.Close()
+	<-done
+}
+
 func TestTunnelConn_requestState(t *testing.T) {
 	t.Run("SendFails", func(t *testing.T) {
 		client, gateway := newDummySockets()

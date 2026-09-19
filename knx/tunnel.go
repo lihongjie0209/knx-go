@@ -30,6 +30,10 @@ type TunnelConfig struct {
 
 	// UseTCP configures whether to connect to the gateway using TCP.
 	UseTCP bool
+
+	// Socket uses an already established transport instead of dialing
+	// gatewayAddr. The Tunnel takes ownership and closes it on failure or Close.
+	Socket knxnet.Socket
 }
 
 // DefaultTunnelConfig is a good default configuration for a Tunnel client.
@@ -585,7 +589,9 @@ func NewTunnel(
 	var sock knxnet.Socket
 
 	// Create socket which will be used for communication.
-	if config.UseTCP {
+	if config.Socket != nil {
+		sock = config.Socket
+	} else if config.UseTCP {
 		sock, err = knxnet.DialTunnelTCP(gatewayAddr)
 	} else {
 		sock, err = knxnet.DialTunnelUDP(gatewayAddr)

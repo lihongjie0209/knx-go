@@ -69,11 +69,25 @@ func DialTunnelTCP(address string) (*TunnelSocket, error) {
 	if err != nil {
 		return nil, err
 	}
+	socket, err := NewTunnelTCP(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return socket, nil
+}
 
-	conn.SetDeadline(time.Time{})
-
+// NewTunnelTCP creates a KNXnet/IP tunnel socket over an established TCP
+// connection. The caller transfers ownership of conn to the returned socket.
+func NewTunnelTCP(conn net.Conn) (*TunnelSocket, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("TCP connection is required")
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("clear TCP connection deadline: %w", err)
+	}
 	inbound := make(chan Service)
-	go serveTCPSocket(conn, addr, inbound)
+	go serveTCPSocket(conn, inbound)
 
 	return &TunnelSocket{conn, inbound}, nil
 }
@@ -225,7 +239,7 @@ func serveUDPSocket(conn *net.UDPConn, addr *net.UDPAddr, inbound chan<- Service
 }
 
 // serveTCPSocket is the receiver worker for a TCP socket.
-func serveTCPSocket(conn *net.TCPConn, addr *net.TCPAddr, inbound chan<- Service) {
+func serveTCPSocket(conn net.Conn, inbound chan<- Service) {
 	util.Log(conn, "Started worker")
 	defer util.Log(conn, "Worker exited")
 
