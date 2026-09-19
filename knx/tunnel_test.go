@@ -379,6 +379,67 @@ func TestNewTunnelUsesInjectedSocket(t *testing.T) {
 	<-done
 }
 
+func TestTunnelTCPTransformsMessages(t *testing.T) {
+	client, gateway := newDummySockets()
+	defer client.Close()
+	defer gateway.Close()
+	original := &cemi.UnsupportedMessage{}
+	outbound := &cemi.LDataReq{}
+	inbound := &cemi.LDataInd{}
+	transformedInbound := &cemi.LDataInd{LData: cemi.LData{Destination: 7}}
+	config := DefaultTunnelConfig
+	config.UseTCP = true
+	config.OutboundTransform = func(message cemi.Message) (cemi.Message, error) {
+		if message != original {
+			t.Fatalf("outbound input = %T", message)
+		}
+		return outbound, nil
+	}
+	config.InboundTransform = func(message cemi.Message) (cemi.Message, bool, error) {
+		if message != inbound {
+			t.Fatalf("inbound input = %T", message)
+		}
+		return transformedInbound, true, nil
+	}
+	tunnel := makeTunnelConn(client, config, 3)
+	if err := tunnel.requestTunnel(original); err != nil {
+		t.Fatal(err)
+	}
+	message := <-gateway.Inbound()
+	request, ok := message.(*knxnet.TunnelReq)
+	if !ok || request.Payload != outbound {
+		t.Fatalf("outbound request = %#v", message)
+	}
+	sequence := uint8(0)
+	if err := tunnel.handleTunnelReq(&knxnet.TunnelReq{Channel: 3, Payload: inbound}, &sequence); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-tunnel.Inbound(); got != transformedInbound {
+		t.Fatalf("inbound result = %T", got)
+	}
+}
+
+func TestTunnelTCPInboundTransformCanDrop(t *testing.T) {
+	client, gateway := newDummySockets()
+	defer client.Close()
+	defer gateway.Close()
+	config := DefaultTunnelConfig
+	config.UseTCP = true
+	config.InboundTransform = func(cemi.Message) (cemi.Message, bool, error) {
+		return nil, false, nil
+	}
+	tunnel := makeTunnelConn(client, config, 3)
+	sequence := uint8(0)
+	if err := tunnel.handleTunnelReq(&knxnet.TunnelReq{Channel: 3, Payload: &cemi.LDataInd{}}, &sequence); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case message := <-tunnel.Inbound():
+		t.Fatalf("dropped message was delivered: %T", message)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
 func TestTunnelConn_requestState(t *testing.T) {
 	t.Run("SendFails", func(t *testing.T) {
 		client, gateway := newDummySockets()

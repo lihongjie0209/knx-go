@@ -34,6 +34,14 @@ type TunnelConfig struct {
 	// Socket uses an already established transport instead of dialing
 	// gatewayAddr. The Tunnel takes ownership and closes it on failure or Close.
 	Socket knxnet.Socket
+
+	// OutboundTransform transforms a cEMI message once before a TCP tunnel
+	// request is packed. It can be used by authenticated transport extensions.
+	OutboundTransform func(cemi.Message) (cemi.Message, error)
+
+	// InboundTransform validates or transforms a cEMI message before delivery.
+	// Returning false drops the message. Transforms are supported for TCP only.
+	InboundTransform func(cemi.Message) (cemi.Message, bool, error)
 }
 
 // DefaultTunnelConfig is a good default configuration for a Tunnel client.
@@ -242,6 +250,16 @@ func (conn *Tunnel) requestTunnel(data cemi.Message) error {
 	// Sequence numbers cannot be reused, therefore we must protect against that.
 	conn.seqMu.Lock()
 	defer conn.seqMu.Unlock()
+	if conn.config.OutboundTransform != nil {
+		var err error
+		data, err = conn.config.OutboundTransform(data)
+		if err != nil {
+			return fmt.Errorf("transform outbound cEMI message: %w", err)
+		}
+		if data == nil {
+			return errors.New("outbound cEMI transform returned nil message")
+		}
+	}
 
 	var seqNumber uint8
 
@@ -385,8 +403,22 @@ func (conn *Tunnel) handleTunnelReq(req *knxnet.TunnelReq, seqNumber *uint8) err
 	// In TCP connections, we don't need to check the sequence number and we don't to acknowledge the
 	// tunnelling request.
 	if conn.config.UseTCP {
+		payload := req.Payload
+		if conn.config.InboundTransform != nil {
+			transformed, deliver, err := conn.config.InboundTransform(payload)
+			if err != nil {
+				return fmt.Errorf("transform inbound cEMI message: %w", err)
+			}
+			if !deliver {
+				return nil
+			}
+			if transformed == nil {
+				return errors.New("inbound cEMI transform returned nil message")
+			}
+			payload = transformed
+		}
 		// Send tunnel data to the client without blocking this goroutine to long.
-		conn.pushInbound(req.Payload)
+		conn.pushInbound(payload)
 
 		return nil
 	}
@@ -587,6 +619,9 @@ func NewTunnel(
 	config TunnelConfig,
 ) (tunnel *Tunnel, err error) {
 	var sock knxnet.Socket
+	if !config.UseTCP && (config.OutboundTransform != nil || config.InboundTransform != nil) {
+		return nil, errors.New("cEMI transforms require a TCP tunnel")
+	}
 
 	// Create socket which will be used for communication.
 	if config.Socket != nil {
