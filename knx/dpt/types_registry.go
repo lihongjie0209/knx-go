@@ -192,6 +192,9 @@ var (
 		// 18.xxx
 		new(DPT_18001),
 
+		// 19.xxx
+		new(DPT_19001),
+
 		// 20.xxx
 		new(DPT_20102),
 		new(DPT_20105),
