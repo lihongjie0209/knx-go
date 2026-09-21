@@ -35,12 +35,13 @@ type TunnelConfig struct {
 	// gatewayAddr. The Tunnel takes ownership and closes it on failure or Close.
 	Socket knxnet.Socket
 
-	// OutboundTransform transforms a cEMI message once before a TCP tunnel
-	// request is packed. It can be used by authenticated transport extensions.
+	// OutboundTransform transforms a cEMI message once before a tunnel request
+	// is packed. UDP retransmissions reuse the transformed payload.
 	OutboundTransform func(cemi.Message) (cemi.Message, error)
 
 	// InboundTransform validates or transforms a cEMI message before delivery.
-	// Returning false drops the message. Transforms are supported for TCP only.
+	// Returning false drops the message. UDP duplicates are acknowledged without
+	// applying the transform again.
 	InboundTransform func(cemi.Message) (cemi.Message, bool, error)
 }
 
@@ -427,10 +428,24 @@ func (conn *Tunnel) handleTunnelReq(req *knxnet.TunnelReq, seqNumber *uint8) err
 
 	// Is the sequence number what we expected?
 	if req.SeqNumber == expected {
+		payload := req.Payload
+		deliver := true
+		if conn.config.InboundTransform != nil {
+			transformed, accepted, err := conn.config.InboundTransform(payload)
+			if err != nil {
+				return fmt.Errorf("transform inbound cEMI message: %w", err)
+			}
+			if accepted && transformed == nil {
+				return errors.New("inbound cEMI transform returned nil message")
+			}
+			payload, deliver = transformed, accepted
+		}
 		*seqNumber++
 
-		// Send tunnel data to the client without blocking this goroutine to long.
-		conn.pushInbound(req.Payload)
+		if deliver {
+			// Send tunnel data to the client without blocking this goroutine too long.
+			conn.pushInbound(payload)
+		}
 	} else if req.SeqNumber != expected-1 {
 		// The sequence number is out of the range which we would have to acknowledge.
 		return errors.New("out of sequence tunnel acknowledgement")
@@ -619,10 +634,6 @@ func NewTunnel(
 	config TunnelConfig,
 ) (tunnel *Tunnel, err error) {
 	var sock knxnet.Socket
-	if !config.UseTCP && (config.OutboundTransform != nil || config.InboundTransform != nil) {
-		return nil, errors.New("cEMI transforms require a TCP tunnel")
-	}
-
 	// Create socket which will be used for communication.
 	if config.Socket != nil {
 		sock = config.Socket

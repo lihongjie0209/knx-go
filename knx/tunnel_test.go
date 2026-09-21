@@ -370,6 +370,10 @@ func TestNewTunnelUsesInjectedSocket(t *testing.T) {
 	}()
 	config := DefaultTunnelConfig
 	config.Socket = client
+	config.OutboundTransform = func(message cemi.Message) (cemi.Message, error) { return message, nil }
+	config.InboundTransform = func(message cemi.Message) (cemi.Message, bool, error) {
+		return message, true, nil
+	}
 	tunnel, err := NewTunnel("unused.invalid:0", knxnet.TunnelLayerData, config)
 	if err != nil {
 		t.Fatal(err)
@@ -437,6 +441,40 @@ func TestTunnelTCPInboundTransformCanDrop(t *testing.T) {
 	case message := <-tunnel.Inbound():
 		t.Fatalf("dropped message was delivered: %T", message)
 	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestTunnelUDPInboundTransformRunsOnceBeforeAcknowledgement(t *testing.T) {
+	client, gateway := newDummySockets()
+	defer client.Close()
+	defer gateway.Close()
+	calls := 0
+	transformed := &cemi.LDataInd{LData: cemi.LData{Destination: 7}}
+	config := DefaultTunnelConfig
+	config.InboundTransform = func(cemi.Message) (cemi.Message, bool, error) {
+		calls++
+		return transformed, true, nil
+	}
+	tunnel := makeTunnelConn(client, config, 3)
+	sequence := uint8(0)
+	request := &knxnet.TunnelReq{Channel: 3, SeqNumber: 0, Payload: &cemi.LDataInd{}}
+	if err := tunnel.handleTunnelReq(request, &sequence); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-tunnel.Inbound(); got != transformed {
+		t.Fatalf("inbound result = %T", got)
+	}
+	if ack, ok := (<-gateway.Inbound()).(*knxnet.TunnelRes); !ok || ack.SeqNumber != 0 {
+		t.Fatalf("first acknowledgement = %#v", ack)
+	}
+	if err := tunnel.handleTunnelReq(request, &sequence); err != nil {
+		t.Fatal(err)
+	}
+	if ack, ok := (<-gateway.Inbound()).(*knxnet.TunnelRes); !ok || ack.SeqNumber != 0 {
+		t.Fatalf("duplicate acknowledgement = %#v", ack)
+	}
+	if calls != 1 || sequence != 1 {
+		t.Fatalf("transform calls=%d sequence=%d", calls, sequence)
 	}
 }
 
