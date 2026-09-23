@@ -24,6 +24,13 @@ const (
 	serviceSecureWrap  = 0x0950
 	protocolHeaderSize = 0x06
 	protocolVersion    = 0x10
+
+	// SerialNumberSize is the KNX Secure serial-number width.
+	SerialNumberSize = serialNumberSize
+	// SecureWrapperSize is the fixed overhead of one secure wrapper.
+	SecureWrapperSize = secureWrapperSize
+	// MaxSequence is the largest 48-bit KNX Secure sequence or timer value.
+	MaxSequence = maxSecureSequence
 )
 
 var (
